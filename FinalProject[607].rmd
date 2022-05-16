@@ -1,0 +1,226 @@
+---
+title: "Final Project"
+author: "Al Haque"
+date: "5/14/2022"
+output: 
+  html_document:
+    theme: cerulean 
+    toc: true
+    toc_float: true
+    
+---
+
+ My final project is my attempt at creating a basic recommender system  using the MovieLens dataset I've found on Kaggle. This is my process at exploring the data,preprocessing the data,creating the rating matrix,building a model and implmenting the model to get a recommendations of movies per user. 
+
+
+
+
+
+```{r include=TRUE}
+library(tidyverse)
+library(recommenderlab)
+library(stringi)
+library(reshape2)
+
+```
+
+```{r}
+## insert the MovieLens Dataset: 
+
+ratings <-read.csv("https://raw.githubusercontent.com/AldataSci/FinalProject/main/ratings.csv",header=TRUE)
+movies <- read.csv("https://raw.githubusercontent.com/AldataSci/FinalProject/main/movies.csv",header=TRUE)
+```
+
+------
+
+## Data Exploration: 
+
+```{r}
+## There are various rating from 0.5 to 5 stars rating.. 
+vector_rating <- as.vector(unique(ratings$rating))
+table_rating <- table(vector_rating)
+table_rating
+
+```
+
+
+```{r}
+## Looking at the distribution of the rating.. 
+factor_vector <- as.factor(ratings$rating)
+qplot(factor_vector) + ggtitle("Distribution of the Rating") +
+  theme_bw()
+```
+```{r}
+## Exploring which movies have the most views or most rating! in this small dataset!
+
+## arrange the movie ratings that have been rated the most
+movie_Rating <- ratings %>%
+  group_by(movieId) %>%
+  count() %>%
+  arrange(desc(n))
+
+## do an inner join to get see which movies has been reviewed
+Movie_rating <- movie_Rating %>%
+  inner_join(movies,by="movieId") %>%
+  select(-genres)
+
+ggplot(Movie_rating[1:10,],aes(x=title,y=n))+
+  geom_bar(stat="identity") + 
+  ggtitle("Top Ten Movies That Were Given A Rating") +
+  xlab("Movie") +
+  ylab("Movie Rated By A User") +
+  coord_flip()
+```
+```{r}
+## Exploring Average Rating Per Movie: 
+
+avg_movie_rating <- ratings %>%
+  select("userId","movieId","rating") %>%
+  group_by(movieId) %>%
+  summarise(avg_rating = mean(rating)) %>%
+  inner_join(movies,by="movieId") %>%
+  select(-genres)
+
+
+## left-tail skewed again and some prominent peaks but we can see that most of the average ratings per movies are around a 3 or a 4 maybe we should get rids of 0.5 and 1 to get a better distribution of the data.. 
+
+ggplot(avg_movie_rating,aes(x=avg_rating)) +
+  geom_histogram(color="darkblue",fill="lightblue") +
+  theme_classic() +
+  ggtitle("Distribution of the Average Movie Rating")
+```
+
+```{r}
+## Here I filtered out the average rating greater than 3 and less than 4.5 to have less skewed datas.. 
+avg_movie_rating_clean <- ratings %>%
+  select("userId","movieId","rating") %>%
+  group_by(movieId) %>%
+  summarise(avg_rating = mean(rating)) %>%
+  filter(avg_rating > "2.5" & avg_rating <= "4.5") %>%
+  inner_join(movies,by="movieId") %>%
+  select(-genres)
+
+
+## Distribution Looks Okay when we removed the exteremes but there are too many dramatic peaks in the datas..
+## we removed this since possibly a few people have accounted for the average rating.. 
+ggplot(avg_movie_rating_clean,aes(x=avg_rating)) +
+  geom_histogram(color="purple",fill="lightblue") +
+  theme_classic() +
+  ggtitle("Distribution of the Average Movie Rating With Low Rating Removed")
+```
+
+-------
+
+## Data Preprocessing: 
+
+
+```{r}
+## In order to create a rating matrix I had to convert the datings where each row was a user and each column was a movieId and a cell was a rating of a user given to that particular movie
+
+ratingmat = dcast(ratings, userId~movieId, value.var = "rating", na.rm=FALSE)
+
+dim(ratingmat)
+
+```
+
+
+
+```{r}
+## remove the UserId:
+ratingMat <- ratingmat %>%
+  select(-userId) %>%
+  as.matrix()
+RatingMat <- ratingMat %>%
+  as("realRatingMatrix")
+
+## visualize the Heatmap and we can see that the matrix is mainly sparse.
+## A rating matrix of the first 50 users and 50 movie ratings. 
+image(ratingMat[1:50,1:50], main ="Heatmap of the Rating Matrix")
+
+
+```
+
+
+## Building A Model:
+
+```{r}
+## spliting the data into a testing and training model 
+training <- sample(x=c(TRUE,FALSE),size=nrow(RatingMat),replace=TRUE,prob=c(0.8,0.2))
+recc_training_data <- RatingMat[training,]
+recc_testing_data <- RatingMat[!training,]
+
+```
+
+
+
+```{r}
+## Build a UBCM since we are making the recommender based upon the users averages to recommend movies
+## use the default method of cosine.
+
+
+recc_model <- Recommender(data=recc_training_data,method="UBCF",parameter=list(method="Cosine"))
+
+## use the predict model to make prediciton
+
+Top_5_pred = predict(recc_model, recc_testing_data, n=5)
+
+## define a dataframe having a column with the ordered movie labels, access the movie names with the item Label slots..
+movie_Labels <- data.frame(movieId = Top_5_pred@itemLabels)
+movie_Labels <- movies %>%
+  left_join(movies,by="movieId")
+
+```
+## Implementing The Model: 
+
+```{r}
+## look at the recommendation of the first user: 
+recc_user_1 <- Top_5_pred@items[[1]]
+recc_user_1
+movie_Labels$title.x[recc_user_1]
+Top_5_List = as(Top_5_pred, "list")
+```
+
+
+```{r}
+
+## Created A matrix to help show the numbers of users: 
+recc_Matrix <- sapply(Top_5_pred@items,function(x){
+  recommendation <- movie_Labels$title.x[x]
+})
+
+## Showing the Recommendation For the First 3 Users: 
+
+recc_Matrix[,1:5]
+
+
+```
+
+
+```{r}
+
+## We check if some movies are much more likely to be recommended. 
+## visualize the movie distribution:
+## Some movies have been recommended 10 times or fewer and a few has been recommended 20 or 24 times. 
+recc_Matrix_table <- table(recc_Matrix)
+recc_Matrix_Num <- as.numeric(recc_Matrix_table)
+
+bin_recc <- cut(recc_Matrix_Num,breaks=c(0,10,20,max(recc_Matrix_Num)))
+
+qplot(bin_recc) + ggtitle("Distribution of recomendations per Users")
+
+```
+
+------ 
+
+### Sources/Acknowledgements: 
+
+___1.Usuelli, Michele, and Suresh K. Gorakala. Building a Recommendation System with R. Packt Publishing Limited 2015.____
+
+___2.Pierson, Lillian. “How to Build a Recommendation Engine in R: Marketing Data Science!” Data, 22 Mar. 2021, https://www.data-mania.com/blog/how-to-build-a-recommendation-engine-in-r/.____
+
+
+__3.Efficient Reshaping Using Data.tables, 22 Sept. 2021, https://cran.r-project.org/web/packages/data.table/vignettes/datatable-reshape.html.____
+
+-------
+
+## Thank you! 
